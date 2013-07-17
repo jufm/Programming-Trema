@@ -26,19 +26,19 @@ Fácil? Pode não acreditar, mas já entendeu 95% OpenFlow.
 
 Imagem 1　Procedimentos dos atendimentos por telefone
 
-## OpenFlowに置き換えると……
+## Voltando para o OpenFlow
 
-OpenFlow では，お客さんがパケットを発生させるホスト，電話サポート係がスイッチ，上司がコントローラ，マニュアルがスイッチのフローテーブル (後述) に対応します （図2）.
+No OpenFlow, o cliente é o host que gera o pacote, o atendente é o switch，o superior é o controller，e o manual é a tabela de roteamento (後述) （Imagem 2）.
 
 ![Modelo de funcionamento do OpenFlow](https://github.com/trema/Programming-Trema/raw/master/images/2_002.png)
 
 Imagem 2　Modelo de funcionamento do OpenFlow
 
-スイッチはホストからのパケットを受信すると，最初はその処理方法がわかりません.そこで，上司にあたるコントローラに問い合わせます.この問い合わせを `packet_in` メッセージと呼びます.コントローラはこれを受け取ると，同様のパケットが届いた場合にスイッチでどう処理すべきか (パケットを転送する，書き換えるなど) を決めます.これをアクションと呼びます.そして 「スイッチで処理すべきパケットの特徴」＋「アクション」 の組 （フローと呼びます） をスイッチのマニュアルに追加します.この命令を `flow_mod` メッセージと呼び，スイッチのマニュアルをフローテーブルと呼びます.処理すべきパケットの特徴とアクションをフローテーブルに書いておくことで，以後，これに当てはまるパケットはスイッチ側だけですばやく処理できます.忘れてはならないのが，`packet_in` メッセージで上がってきた最初のパケットです.これはコントローラに上がってきて処理待ちの状態になっているので，`packet_out` メッセージで適切な宛先に転送してあげます.
+Em primeito momento o switch não sabe processar o pacote recebido pelo host. Logo, precisa consultar o controller. A mensagem de consulta é chamada de `packet_in`. Quando o controller recebe o pacote ele decide se deve ser redirecionado ou sobrescrito. これをアクションと呼びます.そして 「スイッチで処理すべきパケットの特徴」＋「アクション」 の組 （フローと呼びます） をスイッチのマニュアルに追加します. Essa mensagem de decisão é chamada de `flow_mod`. 処理すべきパケットの特徴とアクションをフローテーブルに書いておくことで，以後，これに当てはまるパケットはスイッチ側だけですばやく処理できます. Não esquecendo que `packet_in` é a primeira mensagem do pacote. これはコントローラに上がってきて処理待ちの状態になっているので，`packet_out` メッセージで適切な宛先に転送してあげます.
 
-電話サポートとの大きな違いは，フローテーブルに書かれたフローには期限があり，これを過ぎると消えてしまうということです.これは，「マニュアルに書かれた内容は徐々に古くなるので，古くなった項目は消す必要がある」 と考えるとわかりやすいかもしれません.フローが消えるタイミングでコントローラには `flow_removed` メッセージが送信されます.これには，あるフローに従ってパケットがどれだけ転送されたか -- 電話サポートの例で言うと，マニュアルのある項目が何回参照されたか -- つまり，トラフィックの集計情報が記録されています.
+A grande diferença com o suporte por telefone é que a tabela de roteamento tem validade e após esse periodo ela some. これは，「マニュアルに書かれた内容は徐々に古くなるので，古くなった項目は消す必要がある」 と考えるとわかりやすいかもしれません.フローが消えるタイミングでコントローラには `flow_removed` メッセージが送信されます.これには，あるフローに従ってパケットがどれだけ転送されたか -- 電話サポートの例で言うと，マニュアルのある項目が何回参照されたか -- つまり，トラフィックの集計情報が記録されています.
 
-それではしくみの話はこのぐらいにして，早速実践に移りましょう.もし途中でわからなくなったら，この節の頭から読み直してください.
+A explicação do funcionamento termina aqui. Vamos para a prática. Caso fique confuso, leia este tópico novemente.
 
 
 # 「トラフィック集計スイッチ」 コントローラの概要
@@ -47,13 +47,13 @@ Imagem 2　Modelo de funcionamento do OpenFlow
 
 ## 設計と実装
 
-「L2 スイッチ機能」と「トラフィックの集計機能」のためにはどんな部品が必要でしょうか？ まずは，スイッチに指示を出す上司にあたるコントローラクラスが必要です.これを `TrafficMonitor` クラスと名付けましょう.また，パケットを宛先のスイッチポートへ届けるための `FDB` クラス (注1)，あとはトラフィックを集計するための `Counter` クラスの 3 つが最低限必要です.
+「L2 スイッチ機能」と「トラフィックの集計機能」のためにはどんな部品が必要でしょうか？ まずは，スイッチに指示を出す上司にあたるコントローラクラスが必要です.これを `TrafficMonitor` クラスと名付けましょう.また，パケットを宛先のスイッチポートへ届けるための `FDB` クラス (obs1)，あとはトラフィックを集計するための `Counter` クラスの 3 つが最低限必要です.
 
-注1) FDB とは Forwarding DataBase の略で，スイッチの一般的な機能です.詳しくは続く実装で説明します.
+obs1) FDB とは Forwarding DataBase の略で，スイッチの一般的な機能です.詳しくは続く実装で説明します.
 
-### FDBクラス
+### Classe FDB
 
-`FDB` クラス (リスト1) は，ホストの MAC アドレスとホストが接続しているスイッチポートの対応を学習するデータベースです.このデータベースを参照することで，`packet_in` メッセージで入ってきたパケットの宛先 MAC アドレスからパケット送信先のスイッチポートを決定できます.
+Classe `FDB`  (リスト1) は，ホストの MAC アドレスとホストが接続しているスイッチポートの対応を学習するデータベースです.このデータベースを参照することで，`packet_in` メッセージで入ってきたパケットの宛先 MAC アドレスからパケット送信先のスイッチポートを決定できます.
 
 ```ruby
 class FDB
@@ -137,9 +137,9 @@ class TrafficMonitor < Controller
     @counter.add message.match.dl_src,message.packet_count, message.byte_count
   end
 
-  private # <- 以下、プライベートメソッド
+  private # <- área privada
 
-  def show_counter # <- カウンタを表示
+  def show_counter # <- mostra o contador
     puts Time.now
     @counter.each_pair do | mac, counter |
       puts "#{ mac } #{ counter[ :packet_count ] } packets (#{ counter[ :byte_count ] } bytes)"
@@ -149,13 +149,13 @@ class TrafficMonitor < Controller
   def flow_mod datapath_id, macsa, macda, out_port # <- macsa から macda へのパケットを out_port へ転送する flow_mod を打つ
     send_flow_mod_add(
       datapath_id,
-      :hard_timeout => 10, # <- flow_mod の有効期限は10秒
+      :hard_timeout => 10, # <- flow_mod com validade de 10 segundos
       :match => Match.new( :dl_src => macsa, :dl_dst => macda ),
       :actions => Trema::ActionOutput.new( out_port )
     )
   end
 
-  def packet_out datapath_id, message, out_port # <- packet_in したメッセージを out_port へ転送
+  def packet_out datapath_id, message, out_port # <- packet_in é redirecionado para out_port 
     send_packet_out(
       datapath_id,
       :packet_in => message,
@@ -198,8 +198,8 @@ end
 
 図5　host1 から host2 宛にパケットを送信したときの動作シーケンス
 
-1. `host1` から `host2` を宛先としてパケットを送信すると，まずはスイッチにパケットが届く
-2. スイッチのフローテーブルは最初はまっさらで，どう処理すればよいかわからない状態なので，コントローラである `TrafficMonitor` に `packet_in` メッセージを送る
+1. O pacote enciado do `host1` para `host2` chega no switch
+2. Como a tabela de roteamento esta vazia a mensagem `packet_in` é enviada para o controller `TrafficMonitor`
 3. `TrafficMonitor` の `packet_in` メッセージハンドラでは，`packet_in` メッセージの `in_port` (`host1` のつながるスイッチポート) と `host1` の MAC アドレスを FDB に記録する
 4. また，`Counter` に記録された `host1` の送信トラフィックを 1 パケット分増やす
 5. `packet_in` メッセージの宛先 MAC アドレスから，転送先のスイッチポート番号を FDB に問い合わせる.これは，先ほど `host1` から `host2` にパケットを送った時点で FDB に学習させているので，送信先はスイッチポート 1 番ということがわかる
@@ -209,9 +209,9 @@ end
 最後の 7 によって，以降の `host2` から `host1` へのパケットはすべてスイッチ側だけで処理されるようになります.
 
 
-# 実行してみよう
+# Botando em prática
 
-それでは，早速実行してみましょう (注2).リスト 4 の内容の仮想ネットワーク設定を `traffic-monitor.conf` として保存し，次のように実行してください.
+それでは，早速実行してみましょう (obs2).リスト 4 の内容の仮想ネットワーク設定を `traffic-monitor.conf` として保存し，次のように実行してください.
 
     % ./trema run ./traffic-monitor.rb -c ./traffic-monitor.conf
 
@@ -244,19 +244,19 @@ link "0xabc", "host2"
     
     % ./trema send_packets --source host2 --dest host1 --n_pkts 10 --pps 10← host2からhost1宛にパケットを10個送る
 
-`trema run` を実行した元のターミナルに次のような出力が出ていれば成功です(注3).
+`trema run` を実行した元のターミナルに次のような出力が出ていれば成功です(obs3).
 
     ...
     00:00:00:00:00:01 10 packets (640 bytes)
-    ↑host1からパケットが10個送信された
+    ↑host1 enviou 10 pacotes
     
     00:00:00:00:00:02 10 packets (640 bytes)
-    ↑host2からパケットが10個送信された
+    ↑host2 enviou 10 pacotes
     ...
 
-注2) Trema のセットアップが済んでいない人は，前回もしくは Trema のドキュメントを参考にセットアップしておいてください.なお，Trema は頻繁に更新されていますので，すでにインストールしている人も最新版にアップデートすることをお勧めします.
+obs2) Trema のセットアップが済んでいない人は，前回もしくは Trema のドキュメントを参考にセットアップしておいてください.なお，Trema は頻繁に更新されていますので，すでにインストールしている人も最新版にアップデートすることをお勧めします.
 
-注3) その他のトラフィック情報も出るかもしれませんが，これは Linux カーネルが送っている IPv6 のパケットなので，`host1`， `host2` とは関係ありません.
+obs3) その他のトラフィック情報も出るかもしれませんが，これは Linux カーネルが送っている IPv6 のパケットなので，`host1`， `host2` とは関係ありません.
 
 
 # Concluindo
